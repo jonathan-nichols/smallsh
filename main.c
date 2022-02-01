@@ -55,29 +55,32 @@ void runShell(void) {
 void parseCommand(char* input, command* newCommand) {
     // regex vars
     regex_t re;
-    size_t nmatch = 2;
-    regmatch_t pmatch[2];
+    size_t nmatch = 9;
+    regmatch_t pmatch[9];
     int rc, start, finish;
+    const char* pattern = "([^[:space:]]+)([^&<>]+)?"
+                          "(<[[:space:]]([^[:space:]]+))?"
+                          "([[:space:]]?>[[:space:]]([^[:space:]]+))?"
+                          "([[:space:]]?(&$))?";
     // match command
-    rc = regcomp(&re, "[^[:space:]]+", REG_EXTENDED);
+    rc = regcomp(&re, pattern, REG_EXTENDED);
     rc = regexec(&re, input, nmatch, pmatch, 0);
     if (rc != 0) {
         // no match on command, treat as empty comment
         strcpy(newCommand->cmd, "#");
-    } else {
-        start = pmatch[0].rm_so;
-        finish = pmatch[0].rm_eo;
-        strncpy(newCommand->cmd, input + start, finish - start);
-        newCommand->cmd[finish - start] = '\0';
-    }
-    // match args
-    rc = regcomp(&re, "[^&<>][[:space:]]([^&<>]+)", REG_EXTENDED);
-    rc = regexec(&re, input, nmatch, pmatch, 0);
-    if (rc != 0) {
-        newCommand->numArgs = 0;
+        return;
     } else {
         start = pmatch[1].rm_so;
         finish = pmatch[1].rm_eo;
+        strncpy(newCommand->cmd, input + start, finish - start);
+        newCommand->cmd[finish - start] = '\0';
+    }
+    // check args
+    if (pmatch[2].rm_so == -1) {
+        newCommand->numArgs = 0;
+    } else {
+        start = pmatch[2].rm_so;
+        finish = pmatch[2].rm_eo;
         char* args = calloc(finish - start + 1, sizeof(char));
         strncpy(args, input + start, finish - start);
         args[finish - start] = '\0';
@@ -94,32 +97,26 @@ void parseCommand(char* input, command* newCommand) {
         newCommand->numArgs = i;
         free(args);
     }
-    // match infile
-    rc = regcomp(&re, "<[[:space:]]([^[:space:]]+)", REG_EXTENDED);
-    rc = regexec(&re, input, nmatch, pmatch, 0);
-    if (rc != 0) {
+    // check infile
+    if (pmatch[4].rm_so == -1) {
         strcpy(newCommand->inFile, "");
     } else {
-        start = pmatch[1].rm_so;
-        finish = pmatch[1].rm_eo;
+        start = pmatch[4].rm_so;
+        finish = pmatch[4].rm_eo;
         strncpy(newCommand->inFile, input + start, finish - start);
         newCommand->inFile[finish - start] = '\0';
     }
-    // match outfile
-    rc = regcomp(&re, ">[[:space:]]([^[:space:]]+)", REG_EXTENDED);
-    rc = regexec(&re, input, nmatch, pmatch, 0);
-    if (rc != 0) {
+    // check outfile
+    if (pmatch[6].rm_so == -1) {
         strcpy(newCommand->outFile, "");
     } else {
-        start = pmatch[1].rm_so;
-        finish = pmatch[1].rm_eo;
+        start = pmatch[6].rm_so;
+        finish = pmatch[6].rm_eo;
         strncpy(newCommand->outFile, input + start, finish - start);
         newCommand->outFile[finish - start] = '\0';
     }
-    // match &
-    rc = regcomp(&re, "&$", REG_EXTENDED);
-    rc = regexec(&re, input, nmatch, pmatch, 0);
-    if (rc != 0) {
+    // check &
+    if (pmatch[8].rm_so == -1) {
         newCommand->foreground = true;
     } else {
         newCommand->foreground = false;
@@ -137,9 +134,9 @@ void printCommand(command* currCommand) {
     printf("Input file: %s\n", currCommand->inFile);
     printf("Output file: %s\n", currCommand->outFile);
     if (currCommand->foreground) {
-        printf("Process in foreground\n\n");
+        printf("Process in foreground\n");
     } else {
-        printf("Process in background\n\n");
+        printf("Process in background\n");
     }
 }
 
