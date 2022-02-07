@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdbool.h>
 #include <regex.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #define MAX_PATH 4096
 #define MAX_LINE 2048
@@ -22,6 +24,7 @@ typedef struct command {
 void runShell(void);
 void parseCommand(char*, command*);
 void printCommand(command*);
+char* expandVariables(char*);
 
 int main(void) {
     runShell();
@@ -29,17 +32,20 @@ int main(void) {
 }
 
 void runShell(void) {
-    char* input;
+    char *input, *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
     bool exit = false;
-    // read input from user
     while (!exit) {
         printf(":");
         // store the user input in the command struct
         int read = getline(&input, &len, stdin);
         input[read - 1] = '\0';
-        parseCommand(input, currCommand);
+        // perform variable expansion
+        expanded = expandVariables(input);
+        finalInput = expanded != NULL ? expanded : input;
+        // parse the command into a struct
+        parseCommand(finalInput, currCommand);
         // process the given command
         if (strcmp(currCommand->cmd, "exit") == 0) {
             exit = true;
@@ -50,6 +56,46 @@ void runShell(void) {
     // clean up allocated memory
     free(currCommand);
     free(input);
+    if (expanded != NULL) {
+        free(expanded);
+    }
+}
+
+char* expandVariables(char* input) {
+    const char* var = "$$";
+    pid_t pid = getpid();
+    int lenVar = 2;
+    int lenPid = snprintf(NULL, 0, "%d", pid);
+    // find number of expansions
+    int count = 0;
+    char* cursor = input;
+    while ((cursor = strstr(cursor, var))) {
+        count++;
+        cursor += 2;
+    }
+    // if no expansions, return null
+    if (!count) {
+        return NULL;
+    }
+    // allocate space for expanded string
+    char* expanded = malloc(strlen(input) + (lenPid - lenVar) * count + 1);
+    char* pidString = malloc(lenPid + 1);
+    sprintf(pidString, "%d", pid);
+    // replace the variables
+    char* tmp = expanded;
+    int lenToCopy;
+    while (count--) {
+        cursor = strstr(input, var);
+        lenToCopy = cursor - input;
+        // copy and update tmp to next insert point
+        tmp = strncpy(tmp, input, lenToCopy) + lenToCopy;
+        tmp = strcpy(tmp, pidString) + lenPid;
+        input += lenToCopy + lenVar;
+    }
+    free(pidString);
+    // copy the last part of the input string
+    strcpy(tmp, input);
+    return expanded;
 }
 
 void parseCommand(char* input, command* newCommand) {
