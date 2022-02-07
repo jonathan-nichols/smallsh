@@ -25,10 +25,10 @@ typedef struct command {
 } command;
 
 // function prototypes
-char* expandVariables(char*);
 void processCommand(command*, int*);
 void printStatus(int);
 void handleSIGTSTP(int);
+char* expandVariables(char*);
 void parseCommand(char*, command*);
 void fixRedirect(char*);
 void printCommand(command*);
@@ -299,22 +299,6 @@ void parseCommand(char* input, command* newCommand) {
 void fixRedirect(char* filepath) {
     if (strcmp(filepath, "") == 0) {
         strcpy(filepath, "/dev/null");
-    }
-}
-
-void printCommand(command* currCommand) {
-    // print out the parsed command
-    // useful for debugging
-    printf("Cmd: %s\n", currCommand->cmd);
-    for (int i = 0; i < currCommand->numArgs; i++) {
-        printf("Arg %d: %s\n", i, currCommand->args[i]);
-    }
-    printf("Input file: %s\n", currCommand->inFile);
-    printf("Output file: %s\n", currCommand->outFile);
-    if (currCommand->foreground) {
-        printf("Process in foreground\n");
-    } else {
-        printf("Process in background\n");
     }
 }
 
