@@ -5,11 +5,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <regex.h>
 
 #define MAX_LINE 2048
 #define MAX_ARGS 512
+
+int fgOnlyMode = 0;
 
 // store the components of a command input
 typedef struct command {
@@ -23,18 +26,33 @@ typedef struct command {
 
 // function prototypes
 char* expandVariables(char*);
-void parseCommand(char*, command*);
 void processCommand(command*, int*);
 void printStatus(int);
+void handleSIGTSTP(int);
+void parseCommand(char*, command*);
 void fixRedirect(char*);
 void printCommand(command*);
 
 int main(void) {
+    // parent process ignores SIGINT
+    struct sigaction SIGINT_action = {{0}};
+    SIGINT_action.sa_handler = SIG_IGN;
+    sigfillset(&SIGINT_action.sa_mask);
+    SIGINT_action.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &SIGINT_action, NULL);
+    // handle SIGTSTP
+    struct sigaction SIGTSTP_action = {{0}};
+    SIGTSTP_action.sa_handler = handleSIGTSTP;
+    sigfillset(&SIGTSTP_action.sa_mask);
+    SIGTSTP_action.sa_flags = SA_RESTART;
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+    // declare variables
     int childPid, status = 0;
     char *input, *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
     bool exit = false;
+    // run the shell loop
     while (!exit) {
         printf(":");
         fflush(stdout);
@@ -73,6 +91,104 @@ int main(void) {
         free(expanded);
     }
     return 0;
+}
+
+void processCommand(command* currCommand, int* childStatus) {
+    // build the arg vector
+    char* newargv[currCommand->numArgs + 2];
+    newargv[0] = currCommand->cmd;
+    for (int i = 0; i < currCommand->numArgs; i++) {
+        newargv[i + 1] = currCommand->args[i];
+    }
+    newargv[currCommand->numArgs + 1] = NULL;
+    // check for background redirects
+    if (!currCommand->foreground) {
+        fixRedirect(currCommand->inFile);
+        fixRedirect(currCommand->outFile);
+    }
+    // create the fork process
+    int source, target, result;
+    pid_t childPid = fork();
+    switch (childPid) {
+        case -1:
+            perror("fork() failed!");
+            exit(1);
+            break;
+        case 0:
+            // child process
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_IGN);
+            // check for redirection
+            if (strcmp(currCommand->inFile, "") != 0) {
+                // open file for input redirection
+                source = open(currCommand->inFile, O_RDONLY);
+                if (source == -1) {
+                    printf("cannot open %s for input\n:", currCommand->inFile);
+                    fflush(stdout);
+                    exit(1);
+                }
+                result = dup2(source, 0);
+                if (result == -1) {
+                    perror("source file dup2()");
+                    exit(1);
+                }
+                fcntl(source, F_SETFD, FD_CLOEXEC);
+            }
+            if (strcmp(currCommand->outFile, "") != 0) {
+                // open file for output redirection
+                target = open(currCommand->outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (target == -1) {
+                    printf("cannot open %s for output\n:", currCommand->outFile);
+                    fflush(stdout);
+                    exit(1);
+                }
+                result = dup2(target, 1);
+                if (result == -1) {
+                    perror("target file dup2()");
+                    exit(1);
+                }
+                fcntl(target, F_SETFD, FD_CLOEXEC);
+            }
+            // execute the command
+            execvp(newargv[0], newargv);
+            printf("%s: no such file or directory\n", newargv[0]);
+            fflush(stdout);
+            exit(1);
+            break;
+        default:
+            if (!currCommand->foreground && !fgOnlyMode) {
+                // process in background
+                printf("background id is %d\n", childPid);
+                childPid = waitpid(childPid, childStatus, WNOHANG);
+                fflush(stdout);
+            } else {
+                // process in foreground
+                childPid = waitpid(childPid, childStatus, 0);
+                // output status message on sigint
+                if (!WIFSIGNALED(childStatus)) {
+                    printStatus(*childStatus);
+                }
+            }
+    }
+}
+
+void printStatus(int status) {
+    if (WIFEXITED(status)) {
+        printf("exit value %d\n", WEXITSTATUS(status));
+    } else {
+        printf("terminated by signal %d\n", WTERMSIG(status));
+    }
+    fflush(stdout);
+}
+
+void handleSIGTSTP(int sig) {
+    if (!fgOnlyMode) {
+        write(2, "Entering foreground-only mode (& is now ignored)\n:", 50);
+        fgOnlyMode = 1;
+    } else {
+        write(2, "Exiting foreground-only mode\n:", 30);
+        fgOnlyMode = 0;
+    }
 }
 
 char* expandVariables(char* input) {
@@ -176,93 +292,8 @@ void parseCommand(char* input, command* newCommand) {
         newCommand->outFile[finish - start] = '\0';
     }
     // check &
-    if (pmatch[8].rm_so == -1) {
-        newCommand->foreground = true;
-    } else {
-        newCommand->foreground = false;
-    }
+    newCommand->foreground = (pmatch[8].rm_so == -1);
     regfree(&re);
-}
-
-void processCommand(command* currCommand, int* childStatus) {
-    // build the arg vector
-    char* newargv[currCommand->numArgs + 2];
-    newargv[0] = currCommand->cmd;
-    for (int i = 0; i < currCommand->numArgs; i++) {
-        newargv[i + 1] = currCommand->args[i];
-    }
-    newargv[currCommand->numArgs + 1] = NULL;
-    // check for background redirects
-    if (!currCommand->foreground) {
-        fixRedirect(currCommand->inFile);
-        fixRedirect(currCommand->outFile);
-    }
-    // create the fork process
-    int source, target, result;
-    pid_t childPid = fork();
-    switch (childPid) {
-        case -1:
-            perror("fork() failed!");
-            exit(1);
-            break;
-        case 0:
-            // child process
-            if (strcmp(currCommand->inFile, "") != 0) {
-                // open file for input redirection
-                source = open(currCommand->inFile, O_RDONLY);
-                if (source == -1) {
-                    printf("cannot open %s for input", currCommand->inFile);
-                    fflush(stdout);
-                    exit(1);
-                }
-                result = dup2(source, 0);
-                if (result == -1) {
-                    perror("source file dup2()");
-                    exit(1);
-                }
-                fcntl(source, F_SETFD, FD_CLOEXEC);
-            }
-            if (strcmp(currCommand->outFile, "") != 0) {
-                // open file for output redirection
-                target = open(currCommand->outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (target == -1) {
-                    printf("cannot open %s for output", currCommand->outFile);
-                    fflush(stdout);
-                    exit(1);
-                }
-                result = dup2(target, 1);
-                if (result == -1) {
-                    perror("target file dup2()");
-                    exit(1);
-                }
-                fcntl(target, F_SETFD, FD_CLOEXEC);
-            }
-            // execute the command
-            execvp(newargv[0], newargv);
-            printf("%s: no such file or directory\n", newargv[0]);
-            fflush(stdout);
-            exit(1);
-            break;
-        default:
-            if (currCommand->foreground) {
-                // process in foreground
-                childPid = waitpid(childPid, childStatus, 0);
-            } else {
-                // process in background
-                childPid = waitpid(childPid, childStatus, WNOHANG);
-                printf("background id is %d\n", childPid);
-                fflush(stdout);
-            }
-    }
-}
-
-void printStatus(int status) {
-    if (WIFEXITED(status)) {
-        printf("exit value %d\n", WEXITSTATUS(status));
-    } else {
-        printf("terminated by signal %d\n", WTERMSIG(status));
-    }
-    fflush(stdout);
 }
 
 void fixRedirect(char* filepath) {
