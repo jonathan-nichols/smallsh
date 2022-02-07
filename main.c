@@ -7,7 +7,6 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#define MAX_PATH 4096
 #define MAX_LINE 2048
 #define MAX_ARGS 512
 
@@ -16,44 +15,47 @@ typedef struct command {
     char cmd[MAX_LINE];
     char args[MAX_ARGS][MAX_LINE];
     int numArgs;
-    char inFile[MAX_PATH];
-    char outFile[MAX_PATH];
+    char inFile[MAX_LINE];
+    char outFile[MAX_LINE];
     bool foreground;
 } command;
 
 // function prototypes
-void runShell(void);
+char* expandVariables(char*);
 void parseCommand(char*, command*);
 void processCommand(command*);
 void printCommand(command*);
-char* expandVariables(char*);
 
 int main(void) {
-    runShell();
-    return 0;
-}
-
-void runShell(void) {
     char *input, *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
     bool exit = false;
     while (!exit) {
         printf(":");
+        fflush(stdout);
         // store the user input in the command struct
         int read = getline(&input, &len, stdin);
         input[read - 1] = '\0';
-        // perform variable expansion
         expanded = expandVariables(input);
         finalInput = (expanded != NULL) ? expanded : input;
-        // parse the command into a struct
         parseCommand(finalInput, currCommand);
-        // process the given command
         if (strcmp(currCommand->cmd, "exit") == 0) {
+            // built-in exit
             exit = true;
-        } else if (strcmp(currCommand->cmd, "#") != 0) {
+        } else if (strcmp(currCommand->cmd, "cd") == 0) {
+            // built-in cd
+            char* dest = (currCommand->numArgs == 0)
+                ? getenv("HOME") 
+                : currCommand->args[0];
+            chdir(dest);
+        } else if (strcmp(currCommand->cmd, "status") == 0) {
+            // built-in status
+            printf("status goes here\n");
+        } else if (strncmp(currCommand->cmd, "#", 1) != 0) {
+            // exec for other commands
             processCommand(currCommand);
-        }
+        } 
     }
     // clean up allocated memory
     free(currCommand);
@@ -61,6 +63,7 @@ void runShell(void) {
     if (expanded != NULL) {
         free(expanded);
     }
+    return 0;
 }
 
 char* expandVariables(char* input) {
@@ -173,44 +176,35 @@ void parseCommand(char* input, command* newCommand) {
 }
 
 void processCommand(command* currCommand) {
-    if (strcmp(currCommand->cmd, "cd") == 0) {
-        char* dest = (currCommand->numArgs == 0)
-            ? getenv("HOME") 
-            : currCommand->args[0];
-        chdir(dest);
-    } else if (strcmp(currCommand->cmd, "status") == 0) {
-        printf("status goes here");
-    } else {
-        // build the arg vector
-        char* newargv[currCommand->numArgs + 2];
-        newargv[0] = currCommand->cmd;
-        for (int i = 0; i < currCommand->numArgs; i++) {
-            newargv[i + 1] = currCommand->args[i];
-        }
-        newargv[currCommand->numArgs + 1] = NULL;
-        // create the fork process
-        int childStatus;
-        pid_t childPid = fork();
-        switch (childPid) {
-            case -1:
-                perror("fork() failed!");
-                exit(1);
-                break;
-            case 0: ;
-                // child process
-                execvp(newargv[0], newargv);
-                perror("shell could not find command to run");
-                exit(1);
-                break;
-            default:
-                // parent process
-                childPid = waitpid(childPid, &childStatus, 0);
-                if (WIFEXITED(childStatus)) {
-                    printf("Exited normally with status %d\n", WEXITSTATUS(childStatus));
-                } else {
-                    printf("Exited abnormally due to signal %d\n", WTERMSIG(childStatus));
-                }
-        }
+    // build the arg vector
+    char* newargv[currCommand->numArgs + 2];
+    newargv[0] = currCommand->cmd;
+    for (int i = 0; i < currCommand->numArgs; i++) {
+        newargv[i + 1] = currCommand->args[i];
+    }
+    newargv[currCommand->numArgs + 1] = NULL;
+    // create the fork process
+    int childStatus;
+    pid_t childPid = fork();
+    switch (childPid) {
+        case -1:
+            perror("fork() failed!");
+            exit(1);
+            break;
+        case 0: ;
+            // child process
+            execvp(newargv[0], newargv);
+            perror("shell could not find command to run");
+            exit(1);
+            break;
+        default:
+            // parent process
+            childPid = waitpid(childPid, &childStatus, 0);
+            if (WIFEXITED(childStatus)) {
+                printf("Exited normally with status %d\n", WEXITSTATUS(childStatus));
+            } else {
+                printf("Exited abnormally due to signal %d\n", WTERMSIG(childStatus));
+            }
     }
 }
 
