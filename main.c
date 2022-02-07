@@ -1,11 +1,12 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <regex.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <sys/wait.h>
 
 #define MAX_LINE 2048
 #define MAX_ARGS 512
@@ -23,10 +24,12 @@ typedef struct command {
 // function prototypes
 char* expandVariables(char*);
 void parseCommand(char*, command*);
-void processCommand(command*);
+void processCommand(command*, int*);
+void printStatus(int);
 void printCommand(command*);
 
 int main(void) {
+    int status = 0;
     char *input, *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
@@ -51,10 +54,10 @@ int main(void) {
             chdir(dest);
         } else if (strcmp(currCommand->cmd, "status") == 0) {
             // built-in status
-            printf("status goes here\n");
+            printStatus(status);
         } else if (strncmp(currCommand->cmd, "#", 1) != 0) {
             // exec for other commands
-            processCommand(currCommand);
+            processCommand(currCommand, &status);
         } 
     }
     // clean up allocated memory
@@ -175,7 +178,7 @@ void parseCommand(char* input, command* newCommand) {
     regfree(&re);
 }
 
-void processCommand(command* currCommand) {
+void processCommand(command* currCommand, int* childStatus) {
     // build the arg vector
     char* newargv[currCommand->numArgs + 2];
     newargv[0] = currCommand->cmd;
@@ -184,28 +187,62 @@ void processCommand(command* currCommand) {
     }
     newargv[currCommand->numArgs + 1] = NULL;
     // create the fork process
-    int childStatus;
+    int source, target, result;
     pid_t childPid = fork();
     switch (childPid) {
         case -1:
             perror("fork() failed!");
             exit(1);
             break;
-        case 0: ;
+        case 0:
             // child process
+            if (strcmp(currCommand->inFile, "") != 0) {
+                // open file for input redirection
+                source = open(currCommand->inFile, O_RDONLY);
+                if (source == -1) {
+                    perror("source file open()");
+                    exit(1);
+                }
+                result = dup2(source, 0);
+                if (result == -1) {
+                    perror("source file dup2()");
+                    exit(1);
+                }
+                fcntl(source, F_SETFD, FD_CLOEXEC);
+            }
+            if (strcmp(currCommand->outFile, "") != 0) {
+                // open file for output redirection
+                target = open(currCommand->outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (target == -1) {
+                    perror("target file open()");
+                    exit(1);
+                }
+                result = dup2(target, 1);
+                if (result == -1) {
+                    perror("target file dup2()");
+                    exit(1);
+                }
+                fcntl(target, F_SETFD, FD_CLOEXEC);
+            }
+            // execute the command
             execvp(newargv[0], newargv);
-            perror("shell could not find command to run");
+            perror("%s: ", newargv[0]);
             exit(1);
             break;
         default:
             // parent process
-            childPid = waitpid(childPid, &childStatus, 0);
-            if (WIFEXITED(childStatus)) {
-                printf("Exited normally with status %d\n", WEXITSTATUS(childStatus));
-            } else {
-                printf("Exited abnormally due to signal %d\n", WTERMSIG(childStatus));
-            }
+            childPid = waitpid(childPid, childStatus, 0);
+            printStatus(*childStatus);
     }
+}
+
+void printStatus(int status) {
+    if (WIFEXITED(status)) {
+        printf("exit value %d\n", WEXITSTATUS(status));
+    } else {
+        printf("terminated by signal %d\n", WTERMSIG(status));
+    }
+    fflush(stdout);
 }
 
 void printCommand(command* currCommand) {
