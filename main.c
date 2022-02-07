@@ -26,10 +26,11 @@ char* expandVariables(char*);
 void parseCommand(char*, command*);
 void processCommand(command*, int*);
 void printStatus(int);
+void fixRedirect(char*);
 void printCommand(command*);
 
 int main(void) {
-    int status = 0;
+    int childPid, status = 0;
     char *input, *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
@@ -59,6 +60,11 @@ int main(void) {
             // exec for other commands
             processCommand(currCommand, &status);
         } 
+        // check for completed background processes
+        while ((childPid = waitpid(-1, &status, WNOHANG)) > 0) {
+            printf("background pid %d is done: ", childPid);
+            printStatus(status);
+        }
     }
     // clean up allocated memory
     free(currCommand);
@@ -186,6 +192,11 @@ void processCommand(command* currCommand, int* childStatus) {
         newargv[i + 1] = currCommand->args[i];
     }
     newargv[currCommand->numArgs + 1] = NULL;
+    // check for background redirects
+    if (!currCommand->foreground) {
+        fixRedirect(currCommand->inFile);
+        fixRedirect(currCommand->outFile);
+    }
     // create the fork process
     int source, target, result;
     pid_t childPid = fork();
@@ -200,7 +211,8 @@ void processCommand(command* currCommand, int* childStatus) {
                 // open file for input redirection
                 source = open(currCommand->inFile, O_RDONLY);
                 if (source == -1) {
-                    perror("source file open()");
+                    printf("cannot open %s for input", currCommand->inFile);
+                    fflush(stdout);
                     exit(1);
                 }
                 result = dup2(source, 0);
@@ -214,7 +226,8 @@ void processCommand(command* currCommand, int* childStatus) {
                 // open file for output redirection
                 target = open(currCommand->outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
                 if (target == -1) {
-                    perror("target file open()");
+                    printf("cannot open %s for output", currCommand->outFile);
+                    fflush(stdout);
                     exit(1);
                 }
                 result = dup2(target, 1);
@@ -226,13 +239,20 @@ void processCommand(command* currCommand, int* childStatus) {
             }
             // execute the command
             execvp(newargv[0], newargv);
-            perror("%s: ", newargv[0]);
+            printf("%s: no such file or directory\n", newargv[0]);
+            fflush(stdout);
             exit(1);
             break;
         default:
-            // parent process
-            childPid = waitpid(childPid, childStatus, 0);
-            printStatus(*childStatus);
+            if (currCommand->foreground) {
+                // process in foreground
+                childPid = waitpid(childPid, childStatus, 0);
+            } else {
+                // process in background
+                childPid = waitpid(childPid, childStatus, WNOHANG);
+                printf("background id is %d\n", childPid);
+                fflush(stdout);
+            }
     }
 }
 
@@ -243,6 +263,12 @@ void printStatus(int status) {
         printf("terminated by signal %d\n", WTERMSIG(status));
     }
     fflush(stdout);
+}
+
+void fixRedirect(char* filepath) {
+    if (strcmp(filepath, "") == 0) {
+        strcpy(filepath, "/dev/null");
+    }
 }
 
 void printCommand(command* currCommand) {
