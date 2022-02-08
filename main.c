@@ -12,6 +12,7 @@
 #define MAX_LINE 2048
 #define MAX_ARGS 512
 
+// flag for signal handler
 int fgOnlyMode = 0;
 
 // store the components of a command input
@@ -31,7 +32,6 @@ void handleSIGTSTP(int);
 char* expandVariables(char*);
 void parseCommand(char*, command*);
 void fixRedirect(char*);
-void printCommand(command*);
 
 int main(void) {
     // parent process ignores SIGINT
@@ -48,7 +48,8 @@ int main(void) {
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
     // declare variables
     int childPid, status = 0;
-    char *input, *expanded, *finalInput;
+    char *input = NULL;
+    char *expanded, *finalInput;
     size_t len = 0;
     command* currCommand = malloc(sizeof(command));
     bool exit = false;
@@ -201,7 +202,7 @@ char* expandVariables(char* input) {
     char* cursor = input;
     while ((cursor = strstr(cursor, var))) {
         count++;
-        cursor += 2;
+        cursor += lenVar;
     }
     // if no expansions, return null
     if (!count) {
@@ -297,6 +298,7 @@ void parseCommand(char* input, command* newCommand) {
 }
 
 void fixRedirect(char* filepath) {
+    // only used for background processes
     if (strcmp(filepath, "") == 0) {
         strcpy(filepath, "/dev/null");
     }
