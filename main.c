@@ -124,7 +124,7 @@ void processCommand(command* currCommand, int* childStatus) {
                 // open file for input redirection
                 source = open(currCommand->inFile, O_RDONLY);
                 if (source == -1) {
-                    printf("cannot open %s for input\n:", currCommand->inFile);
+                    printf("cannot open %s for input\n", currCommand->inFile);
                     fflush(stdout);
                     exit(1);
                 }
@@ -139,7 +139,7 @@ void processCommand(command* currCommand, int* childStatus) {
                 // open file for output redirection
                 target = open(currCommand->outFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
                 if (target == -1) {
-                    printf("cannot open %s for output\n:", currCommand->outFile);
+                    printf("cannot open %s for output\n", currCommand->outFile);
                     fflush(stdout);
                     exit(1);
                 }
@@ -166,7 +166,7 @@ void processCommand(command* currCommand, int* childStatus) {
                 // process in foreground
                 childPid = waitpid(childPid, childStatus, 0);
                 // output status message on sigint
-                if (!WIFSIGNALED(childStatus)) {
+                if (WIFSIGNALED(*childStatus)) {
                     printStatus(*childStatus);
                 }
             }
@@ -184,10 +184,10 @@ void printStatus(int status) {
 
 void handleSIGTSTP(int sig) {
     if (!fgOnlyMode) {
-        write(2, "Entering foreground-only mode (& is now ignored)\n:", 50);
+        write(2, "\nEntering foreground-only mode (& is now ignored)\n:", 51);
         fgOnlyMode = 1;
     } else {
-        write(2, "Exiting foreground-only mode\n:", 30);
+        write(2, "\nExiting foreground-only mode\n:", 31);
         fgOnlyMode = 0;
     }
 }
