@@ -2,7 +2,7 @@ Instructions to compile:
 
 Use the make command with the provided Makefile,
 or compile with the following gcc command: 
-    gcc --std=gnu99 -o smallsh main.c
+    gcc --std=gnu99 -o smallsh main.c command.c
 
 Instructions to run:
 
